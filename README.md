@@ -1,1 +1,1 @@
-# box-convolutional-denoising
+# Box Convolutional Denoising 
