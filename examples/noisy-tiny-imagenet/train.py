@@ -7,4 +7,3 @@ import torch.optim as optim
 from torchvision import datasets, transforms
 
 from box_convolution import BoxConv2d
-
