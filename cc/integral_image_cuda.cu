@@ -1,8 +1,8 @@
-#include <ATen/AccumulateType.h>
 #include <torch/extension.h>
+#include <ATen/AccumulateType.h>
 
-#include <cublas_v2.h>
 #include <cuda_runtime.h>
+#include <cublas_v2.h>
 
 #include <ATen/cuda/CUDAContext.h>
 #include <THC/THC.h>
@@ -16,64 +16,67 @@
 namespace gpu {
 
 template <typename scalar_t, typename accscalar_t>
-__global__ void accumulateColsKernel(const scalar_t *__restrict__ input,
-                                     scalar_t *__restrict__ output,
-                                     const int channels, const int h,
-                                     const int w);
+__global__ void accumulateColsKernel(
+    const scalar_t * __restrict__ input, scalar_t * __restrict__ output,
+    const int channels, const int h, const int w);
 
 template <typename scalar_t, typename accscalar_t>
 __global__ void accumulateColsInplaceTransposedKernel(
-    scalar_t *__restrict__ input, const int channels, const int h, const int w);
+    scalar_t * __restrict__ input, const int channels, const int h, const int w);
 
 // contiguous out-of-place transpose
-template <typename scalar_t>
-void transpose(at::Tensor &input, at::Tensor &output) {
-  TORCH_CHECK(input.dim() == 2);
-  TORCH_CHECK(input.numel() == output.numel());
+template<typename scalar_t>
+void transpose(at::Tensor & input, at::Tensor & output) {
 
-  if (std::is_same<scalar_t, float>()) {
-    cublasHandle_t cublasHandle = at::cuda::getCurrentCUDABlasHandle();
-    cudaStream_t currentStream = at::cuda::getCurrentCUDAStream();
-    cublasSetStream(cublasHandle, currentStream);
-    const float ONE = 1.0, ZERO = 0.0;
+    TORCH_CHECK(input.dim() == 2);
+    TORCH_CHECK(input.numel() == output.numel());
 
-    THCublasCheck(cublasSgeam(cublasHandle, CUBLAS_OP_T, CUBLAS_OP_N,
-                              input.size(0), input.size(1), &ONE,
-                              input.data_ptr<float>(), input.size(1), &ZERO,
-                              output.data_ptr<float>(), input.size(0),
-                              output.data_ptr<float>(), input.size(0)));
+    if (std::is_same<scalar_t, float>()) {
+        cublasHandle_t cublasHandle = at::cuda::getCurrentCUDABlasHandle();
+        cudaStream_t currentStream = at::cuda::getCurrentCUDAStream();
+        cublasSetStream(cublasHandle, currentStream);
+        const float ONE = 1.0, ZERO = 0.0;
 
-  } else if (std::is_same<scalar_t, double>()) {
-    cublasHandle_t cublasHandle = at::cuda::getCurrentCUDABlasHandle();
-    cudaStream_t currentStream = at::cuda::getCurrentCUDAStream();
-    cublasSetStream(cublasHandle, currentStream);
-    const double ONE = 1.0, ZERO = 0.0;
+        THCublasCheck(cublasSgeam(
+            cublasHandle,
+            CUBLAS_OP_T, CUBLAS_OP_N, input.size(0), input.size(1),
+            &ONE, input.data_ptr<float>(), input.size(1),
+            &ZERO, output.data_ptr<float>(), input.size(0),
+            output.data_ptr<float>(), input.size(0)));
 
-    THCublasCheck(cublasDgeam(cublasHandle, CUBLAS_OP_T, CUBLAS_OP_N,
-                              input.size(0), input.size(1), &ONE,
-                              input.data_ptr<double>(), input.size(1), &ZERO,
-                              output.data_ptr<double>(), input.size(0),
-                              output.data_ptr<double>(), input.size(0)));
+    } else if (std::is_same<scalar_t, double>()) {
+        cublasHandle_t cublasHandle = at::cuda::getCurrentCUDABlasHandle();
+        cudaStream_t currentStream = at::cuda::getCurrentCUDAStream();
+        cublasSetStream(cublasHandle, currentStream);
+        const double ONE = 1.0, ZERO = 0.0;
 
-  } else {
-    // TODO improve
-    output.view({input.size(1), input.size(0)}).copy_(input.t());
-  }
+        THCublasCheck(cublasDgeam(
+            cublasHandle,
+            CUBLAS_OP_T, CUBLAS_OP_N, input.size(0), input.size(1),
+            &ONE, input.data_ptr<double>(), input.size(1),
+            &ZERO, output.data_ptr<double>(), input.size(0),
+            output.data_ptr<double>(), input.size(0)));
+        
+    } else {
+        // TODO improve
+        output.view({input.size(1), input.size(0)}).copy_(input.t());
+
+    }
 }
 
-void integral_image(at::Tensor &input, at::Tensor &output) {
-  const int h = input.size(-2);
-  const int w = input.size(-1);
-  const int channels = input.numel() / (h * w);
+void integral_image(at::Tensor & input, at::Tensor & output) {
 
-  auto inputView = input.view({channels, h, w});
-  auto outputView = output.view({channels, h + 1, w + 1});
-  auto tmpBuffer = at::empty_like(output);
+    const int h = input.size(-2);
+    const int w = input.size(-1);
+    const int channels = input.numel() / (h * w);
 
-  cudaStream_t currentStream = at::cuda::getCurrentCUDAStream();
+    auto inputView = input.view({channels, h, w});
+    auto outputView = output.view({channels, h+1, w+1});
+    auto tmpBuffer = at::empty_like(output);
 
-  AT_DISPATCH_FLOATING_TYPES_AND_HALF(
-      input.scalar_type(), "integral_image_forward_gpu", ([&] {
+    cudaStream_t currentStream = at::cuda::getCurrentCUDAStream();
+    
+    AT_DISPATCH_FLOATING_TYPES_AND_HALF(input.scalar_type(), "integral_image_forward_gpu", ([&] {
         using accscalar_t = at::acc_type<scalar_t, true>;
 
         // input : (channels) x (h) x (w), contiguous
@@ -87,92 +90,86 @@ void integral_image(at::Tensor &input, at::Tensor &output) {
         const int totalCols = channels * w;
         blockSize1D = BLOCK_SIZE;
         gridSize1D = (totalCols + blockSize1D - 1) / blockSize1D;
-        accumulateColsKernel<scalar_t, accscalar_t>
-            <<<gridSize1D, blockSize1D, 0, currentStream>>>(
-                inputView.data_ptr<scalar_t>(), outputView.data_ptr<scalar_t>(),
-                channels, h, w);
+        accumulateColsKernel <scalar_t, accscalar_t>
+            <<<gridSize1D, blockSize1D, 0, currentStream>>>
+            (inputView.data_ptr<scalar_t>(), outputView.data_ptr<scalar_t>(), channels, h, w);
         THCudaCheck(cudaGetLastError());
 
         // transpose, `output` -> `tmpBuffer`
         // (channels) x (h+1) x (w+1) ==> (w+1) x (channels) x (h+1)
-        auto output2Dim = output.view({channels * (h + 1), w + 1});
+        auto output2Dim = output.view({channels * (h+1), w+1});
         transpose<scalar_t>(output2Dim, tmpBuffer);
 
-        // Compute prefix sums of columns (former rows), `tmpBuffer` ->
-        // `tmpBuffer` (w+1) x (channels) x (h+1) ==> (w+1) x (channels) x (h+1)
-        const int totalRows =
-            channels *
-            h;  // actually, number of cols in (w+1) x (channels * (h+1)) image
+        // Compute prefix sums of columns (former rows), `tmpBuffer` -> `tmpBuffer`
+        // (w+1) x (channels) x (h+1) ==> (w+1) x (channels) x (h+1)
+        const int totalRows = channels * h; // actually, number of cols in (w+1) x (channels * (h+1)) image
         blockSize1D = BLOCK_SIZE;
         gridSize1D = (totalRows + blockSize1D - 1) / blockSize1D;
-        accumulateColsInplaceTransposedKernel<scalar_t, accscalar_t>
-            <<<gridSize1D, blockSize1D, 0, currentStream>>>(
-                tmpBuffer.data_ptr<scalar_t>(), channels, h, w);
+        accumulateColsInplaceTransposedKernel <scalar_t, accscalar_t>
+            <<<gridSize1D, blockSize1D, 0, currentStream>>>
+            (tmpBuffer.data_ptr<scalar_t>(), channels, h, w);
         THCudaCheck(cudaGetLastError());
 
         // transpose, `tmpBuffer` -> `output`
         // (w+1) x (channels) x (h+1) ==> (channels) x (h+1) x (w+1)
-        tmpBuffer = tmpBuffer.reshape({w + 1, channels * (h + 1)});
+        tmpBuffer = tmpBuffer.reshape({w+1, channels * (h+1)});
         transpose<scalar_t>(tmpBuffer, output);
-      }));  // AT_DISPATCH_FLOATING_TYPES_AND_HALF
+    })); // AT_DISPATCH_FLOATING_TYPES_AND_HALF
 }
 
 template <typename scalar_t, typename accscalar_t>
-__global__ void accumulateColsKernel(const scalar_t *__restrict__ input,
-                                     scalar_t *__restrict__ output,
-                                     const int channels, const int h,
-                                     const int w) {
-  // input : (channels * h) x (w)
-  // output: (channels * (h+1)) x (w+1) -- first column remains untouched
+__global__ void accumulateColsKernel(
+    const scalar_t * __restrict__ input, scalar_t * __restrict__ output,
+    const int channels, const int h, const int w) {
+    // input : (channels * h) x (w)
+    // output: (channels * (h+1)) x (w+1) -- first column remains untouched
 
-  // global column index (of total `channels * w` columns in this image):
-  const int globalColIdx = BLOCK_SIZE * blockIdx.x + threadIdx.x;
+    // global column index (of total `channels * w` columns in this image):
+    const int globalColIdx = BLOCK_SIZE * blockIdx.x + threadIdx.x;
 
-  if (globalColIdx < channels * w) {
-    const int channelIdx = globalColIdx / w;
-    const int colIdx = globalColIdx - channelIdx * w;
+    if (globalColIdx < channels * w) {
+        const int channelIdx = globalColIdx / w;
+        const int colIdx = globalColIdx - channelIdx * w;
+        
+        // jump to the channel of interest:
+        int inputPos = channelIdx * h * w + colIdx;
+        // (let local columns be 1-indexed: 0-th output column is always zero)
+        int outputPos = channelIdx * (h+1) * (w+1) + colIdx + 1;
 
-    // jump to the channel of interest:
-    int inputPos = channelIdx * h * w + colIdx;
-    // (let local columns be 1-indexed: 0-th output column is always zero)
-    int outputPos = channelIdx * (h + 1) * (w + 1) + colIdx + 1;
-
-    output[outputPos] = 0;  // 0-th element of every column is always zero
-    accscalar_t sum = 0;
-    for (int i = 1; i <= h; ++i) {
-      sum += static_cast<accscalar_t>(input[inputPos + (i - 1) * w]);
-      output[outputPos + i * (w + 1)] = static_cast<scalar_t>(sum);
+        output[outputPos] = 0; // 0-th element of every column is always zero
+        accscalar_t sum = 0;
+        for (int i = 1; i <= h; ++i) {
+            sum += static_cast<accscalar_t>(input[inputPos + (i-1) * w]);
+            output[outputPos + i * (w+1)] = static_cast<scalar_t>(sum);
+        }
     }
-  }
 }
 
 template <typename scalar_t, typename accscalar_t>
 __global__ void accumulateColsInplaceTransposedKernel(
-    scalar_t *__restrict__ input, const int channels, const int h,
-    const int w) {
-  // in-place.
-  // input: (w+1) x (channels * (h+1))
+    scalar_t * __restrict__ input, const int channels, const int h, const int w) {
+    // in-place.
+    // input: (w+1) x (channels * (h+1))
 
-  // global column index (of total `channels * w` columns in this image):
-  const int globalColIdx = BLOCK_SIZE * blockIdx.x + threadIdx.x;
+    // global column index (of total `channels * w` columns in this image):
+    const int globalColIdx = BLOCK_SIZE * blockIdx.x + threadIdx.x;
 
-  if (globalColIdx < channels * h) {
-    const int channelIdx = globalColIdx / h;
-    // add `channelIdx + 1` to account for one extra column in each horizontally
-    // stacked image
-    const int colIdx = globalColIdx + channelIdx + 1;
+    if (globalColIdx < channels * h) {
+        const int channelIdx = globalColIdx / h;
+        // add `channelIdx + 1` to account for one extra column in each horizontally stacked image
+        const int colIdx = globalColIdx + channelIdx + 1;
 
-    // need to zero the (0,0) corner of the output separately >:(
-    input[channelIdx * (h + 1)] = 0;
+        // need to zero the (0,0) corner of the output separately >:(
+        input[channelIdx * (h+1)] = 0;
 
-    input[colIdx] = 0;  // first element of every column is always zero
-    accscalar_t sum = 0;
-    for (int i = 1; i <= w; ++i) {
-      scalar_t *currentElement = &input[i * channels * (h + 1) + colIdx];
-      sum += static_cast<accscalar_t>(*currentElement);
-      *currentElement = static_cast<scalar_t>(sum);
+        input[colIdx] = 0; // first element of every column is always zero
+        accscalar_t sum = 0;
+        for (int i = 1; i <= w; ++i) {
+            scalar_t *currentElement = &input[i * channels * (h+1) + colIdx];
+            sum += static_cast<accscalar_t>(*currentElement);
+            *currentElement = static_cast<scalar_t>(sum);
+        }
     }
-  }
 }
 
-}  // namespace gpu
+} // namespace gpu

@@ -129,3 +129,6 @@ dmypy.json
 .pyre/
 .vscode
 tmp
+
+# tiny-imagenet data
+data
