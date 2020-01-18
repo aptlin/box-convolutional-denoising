@@ -70,7 +70,7 @@ class NoisyTinyImagenet(Dataset):
         return img + noise, noise
 
     def read_image(self, path):
-        img = Image.open(path)
+        img = Image.open(path).convert("RGB")
         if not self.transform:
             self.transform = transforms.ToTensor()
         return self.transform(img)
