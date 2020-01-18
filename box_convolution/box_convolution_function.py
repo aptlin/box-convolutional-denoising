@@ -14,11 +14,12 @@ def reparametrize(
     inverse=False,
 ):
     """
-        If `inverse is False`, scale module's parameters so that their 
-        range becomes approximately [-1; 1]. 
+        If `inverse is False`, scale module's parameters so that their
+        range becomes approximately [-1; 1].
         Otherwise, do the inverse operation.
 
-        This hack is unfortunately needed for the parameters to work with variants of SGD.
+        This hack is unfortunately needed for the parameters to work with
+        variants of SGD.
         Without this "reparametrization", box sizes' gradients will be extremely small.
 
         If `not inplace`, returns 4 new tensors, otherwise modifies the given ones.
