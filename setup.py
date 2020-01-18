@@ -34,7 +34,7 @@ import torch
 
 build_cuda = torch.cuda.is_available() # TODO allow cross-compiling too
 
-source_root = 'src'
+source_root = 'cc'
 source_files_cpp = [
     'integral_image_interface.cpp',
     'integral_image.cpp',
