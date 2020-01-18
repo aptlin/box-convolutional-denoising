@@ -1,5 +1,7 @@
 # monkey-patch for parallel compilation
 # https://stackoverflow.com/questions/11013851/speeding-up-build-process-with-distutils
+
+
 def parallelCCompile(
     self,
     sources,
@@ -90,5 +92,5 @@ setup(
     packages=["box_convolution"],
     ext_modules=[cpp_cuda],
     cmdclass={"build_ext": torch.utils.cpp_extension.BuildExtension},
-    install_requires=["future", "torch>=1.0.0a0"],
+    install_requires=["future", "torch==1.3.0"],
 )
